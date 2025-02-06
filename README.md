@@ -68,12 +68,22 @@ A Retrieval-Augmented Generation (RAG) system built with open-source tools. This
 
 The search results will show:
 - A relevance score (color-coded):
-  - Green (≥0.7): Highly relevant
-  - Orange (≥0.4): Moderately relevant
+  - Green (≥0.8): Highly relevant
+  - Orange (≥0.5): Moderately relevant
   - Red (<0.4): Less relevant
-- The most relevant snippet from the document
+- The most relevant snippet, automatically extracted and cleaned from the document
 - Full content (expandable)
-- Debug information (expandable)
+- Debug information showing how the score was calculated:
+  - Base similarity: Core semantic matching score
+  - Term boost: Additional score for matching specific terms
+  - Section boost: Score for matching relevant document sections
+  - Context boost: Score for matching question types with content
+
+The system uses multiple strategies to find the most relevant information:
+1. Semantic search using document embeddings
+2. Term-based matching for specific keywords
+3. Section-aware context understanding
+4. Question-type analysis (e.g., who, where, what)
 
 ## System Components
 

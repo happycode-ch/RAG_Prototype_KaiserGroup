@@ -83,6 +83,24 @@ class RAGApp:
     def search_documents(self, query: str):
         """Search for relevant documents based on the query."""
         try:
+            # Preprocess query to identify key terms
+            key_terms = {
+                'cto': ['cto', 'chief technology officer', 'technology officer', 'tech officer'],
+                'location': ['headquarters', 'office', 'located', 'location', 'where'],
+                'project': ['project', 'budget', 'alpha', 'cost', 'million'],
+                'employee': ['who', 'employee', 'staff', 'team', 'lead'],
+            }
+            
+            query_lower = query.lower()
+            relevant_terms = []
+            query_categories = set()
+            
+            # Find matching terms and categories
+            for category, terms in key_terms.items():
+                if any(term in query_lower for term in terms):
+                    relevant_terms.extend(terms)
+                    query_categories.add(category)
+            
             # Generate query embedding
             query_embedding = self.embedding_generator.generate_query_embedding(query)
             
@@ -92,6 +110,71 @@ class RAGApp:
                 query_embedding,
                 threshold=None  # Disable threshold filtering
             )
+            
+            if results and results['documents']:
+                # Enhance results with semantic matching
+                enhanced_results = []
+                for doc, score, metadata in zip(results['documents'], results['distances'], results['metadatas']):
+                    doc_lower = doc.lower()
+                    
+                    # Calculate term boost (0.2 per matching term)
+                    term_matches = sum(1 for term in relevant_terms if term in doc_lower)
+                    term_boost = min(0.6, term_matches * 0.2)  # Cap at 0.6
+                    
+                    # Calculate section boost
+                    section_boost = 0.0
+                    if metadata and 'section' in metadata:
+                        section = metadata['section'].lower()
+                        
+                        # Direct section match
+                        if any(category in section for category in query_categories):
+                            section_boost += 0.3
+                        
+                        # Content relevance boost
+                        if any(term in section for term in relevant_terms):
+                            section_boost += 0.2
+                    
+                    # Context boost for specific types of queries
+                    context_boost = 0.0
+                    if 'who' in query_lower and 'employee information' in doc_lower:
+                        context_boost = 0.2
+                    elif 'where' in query_lower and 'office locations' in doc_lower:
+                        context_boost = 0.2
+                    elif 'budget' in query_lower and 'project' in doc_lower:
+                        context_boost = 0.2
+                    
+                    # Calculate base similarity (convert distance to similarity)
+                    base_similarity = max(0, 1 - score)
+                    
+                    # Calculate final score with weighted components
+                    final_score = min(1.0, base_similarity + term_boost + section_boost + context_boost)
+                    
+                    enhanced_results.append({
+                        'document': doc,
+                        'score': final_score,
+                        'metadata': metadata,
+                        'term_boost': term_boost,
+                        'section_boost': section_boost,
+                        'context_boost': context_boost,
+                        'base_similarity': base_similarity
+                    })
+                
+                # Sort by final score (highest first)
+                enhanced_results.sort(key=lambda x: x['score'], reverse=True)
+                
+                # Update the results
+                results = {
+                    'documents': [r['document'] for r in enhanced_results],
+                    'distances': [1 - r['score'] for r in enhanced_results],  # Convert back to distances
+                    'metadatas': [r['metadata'] for r in enhanced_results],
+                    'debug_info': [{
+                        'base_similarity': r['base_similarity'],
+                        'term_boost': r['term_boost'],
+                        'section_boost': r['section_boost'],
+                        'context_boost': r['context_boost'],
+                        'final_score': r['score']
+                    } for r in enhanced_results]
+                }
             
             return results
             
@@ -140,15 +223,14 @@ def main():
             if results and results['documents']:
                 st.subheader("Search Results")
                 
-                for doc, score in zip(results['documents'], results['distances']):
+                for doc, score, debug in zip(results['documents'], results['distances'], results['debug_info']):
                     st.markdown("---")
-                    # Ensure score is between 0 and 1
-                    similarity_score = max(0, min(1, 1 - (score / 2)))
+                    similarity_score = debug['final_score']  # Use the enhanced score directly
                     
                     # Color code the relevance score
-                    if similarity_score >= 0.7:
+                    if similarity_score >= 0.8:
                         score_color = "green"
-                    elif similarity_score >= 0.4:
+                    elif similarity_score >= 0.5:
                         score_color = "orange"
                     else:
                         score_color = "red"
@@ -156,12 +238,28 @@ def main():
                     # Extract relevant snippet
                     sentences = doc.split('. ')
                     relevant_snippet = ""
+                    query_terms = query.lower().split()
+                    
                     for sentence in sentences:
-                        if "CTO" in sentence or "Chief Technology Officer" in sentence:
-                            relevant_snippet = sentence + "."
+                        sentence_lower = sentence.lower()
+                        # Skip section headers and metadata
+                        if ':' in sentence and any(header in sentence_lower for header in ['overview', 'information:', 'locations:', 'projects:']):
+                            continue
+                        if any(term in sentence_lower for term in query_terms):
+                            # Clean up the sentence
+                            relevant_snippet = sentence.split(': ')[-1].strip() + "."
                             break
+                    
                     if not relevant_snippet:
-                        relevant_snippet = doc
+                        # If no direct match, try to find a sentence with semantic relevance
+                        for sentence in sentences:
+                            sentence_lower = sentence.lower()
+                            if any(category in sentence_lower for category in query_categories):
+                                relevant_snippet = sentence.split(': ')[-1].strip() + "."
+                                break
+                    
+                    if not relevant_snippet:
+                        relevant_snippet = sentences[0].split(': ')[-1].strip() + "." if sentences else doc
                     
                     st.markdown(f"**Relevance Score:** :{score_color}[{similarity_score:.2f}]")
                     st.markdown(f"**Most Relevant Part:**\n{relevant_snippet}")
@@ -172,8 +270,11 @@ def main():
                     
                     # Add debug info in an expander
                     with st.expander("Debug Info"):
-                        st.text(f"Raw distance score: {score}")
-                        st.text(f"Adjusted similarity score: {similarity_score}")
+                        st.text(f"Base similarity: {debug['base_similarity']:.2f}")
+                        st.text(f"Term boost: {debug['term_boost']:.2f}")
+                        st.text(f"Section boost: {debug['section_boost']:.2f}")
+                        st.text(f"Context boost: {debug['context_boost']:.2f}")
+                        st.text(f"Final score: {debug['final_score']:.2f}")
             else:
                 st.info("No results found in the vector store. Try rephrasing your query.")
     
