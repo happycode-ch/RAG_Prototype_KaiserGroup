@@ -35,7 +35,7 @@ class RAGApp:
     def process_uploaded_file(self, uploaded_file):
         """Process an uploaded PDF file."""
         if uploaded_file.name in st.session_state.processed_files:
-            st.warning(f"File {uploaded_file.name} has already been processed.")
+            st.info(f"📝 {uploaded_file.name} is already indexed and ready for searching.")
             return
         
         # Save the uploaded file
@@ -70,8 +70,8 @@ class RAGApp:
             )
             
             st.session_state.processed_files.add(uploaded_file.name)
-            st.success(f"Successfully processed {uploaded_file.name}")
-            st.info(f"Original file saved at: {temp_path}")
+            st.success(f"✅ Successfully processed and indexed {uploaded_file.name}")
+            st.info(f"📄 Original file saved at: {temp_path}")
             
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
@@ -223,6 +223,21 @@ def main():
             if results and results['documents']:
                 st.subheader("Search Results")
                 
+                # Get query information from the app's search method
+                query_lower = query.lower()
+                key_terms = {
+                    'cto': ['cto', 'chief technology officer', 'technology officer', 'tech officer'],
+                    'location': ['headquarters', 'office', 'located', 'location', 'where'],
+                    'project': ['project', 'budget', 'alpha', 'cost', 'million'],
+                    'employee': ['who', 'employee', 'staff', 'team', 'lead'],
+                }
+                
+                # Get relevant terms for the query
+                relevant_terms = []
+                for category, terms in key_terms.items():
+                    if any(term in query_lower for term in terms):
+                        relevant_terms.extend(terms)
+                
                 for doc, score, debug in zip(results['documents'], results['distances'], results['debug_info']):
                     st.markdown("---")
                     similarity_score = debug['final_score']  # Use the enhanced score directly
@@ -237,29 +252,94 @@ def main():
                     
                     # Extract relevant snippet
                     sentences = doc.split('. ')
-                    relevant_snippet = ""
-                    query_terms = query.lower().split()
+                    relevant_sentences = []
+                    query_terms = query_lower.split()
                     
-                    for sentence in sentences:
+                    logger.info(f"Processing query: {query}")
+                    logger.info(f"Query terms: {query_terms}")
+                    logger.info(f"Relevant terms: {relevant_terms}")
+                    
+                    # Score each sentence for relevance
+                    for i, sentence in enumerate(sentences):
                         sentence_lower = sentence.lower()
-                        # Skip section headers and metadata
-                        if ':' in sentence and any(header in sentence_lower for header in ['overview', 'information:', 'locations:', 'projects:']):
-                            continue
-                        if any(term in sentence_lower for term in query_terms):
+                        
+                        # Extract content after header if present
+                        if ':' in sentence:
+                            header, content = sentence.split(':', 1)
+                            if any(marker in header.lower() for marker in ['overview', 'information', 'locations', 'projects']):
+                                sentence = content.strip()
+                                sentence_lower = sentence.lower()
+                        
+                        # Calculate sentence relevance score
+                        score = 0
+                        score_explanation = []
+                        
+                        # Direct term matches
+                        term_matches = sum(1 for term in query_terms if term in sentence_lower)
+                        if term_matches > 0:
+                            score += term_matches * 2
+                            score_explanation.append(f"+{term_matches * 2} for {term_matches} query term matches")
+                        
+                        # Role identification (specific to who-questions)
+                        if 'who' in query_lower or 'cto' in query_lower:
+                            # Primary role patterns with high score
+                            role_patterns = [
+                                ('chief technology officer', 10),
+                                ('cto', 10),
+                                ('is our chief', 8),
+                                ('is the chief', 8),
+                                ('technology officer', 8),
+                                ('tech officer', 8)
+                            ]
+                            
+                            for pattern, points in role_patterns:
+                                if pattern in sentence_lower:
+                                    score += points
+                                    score_explanation.append(f"+{points} for role pattern '{pattern}'")
+                        
+                        # Penalize follow-up sentences less severely
+                        context_indicators = ['has been', 'previously', 'before', 'also', 'additionally']
+                        if any(indicator in sentence_lower for indicator in context_indicators):
+                            score -= 1  # Reduced penalty
+                            score_explanation.append("-1 for context/follow-up indicator")
+                        
+                        # Boost for relevant terms
+                        relevant_term_matches = sum(1 for term in relevant_terms if term in sentence_lower)
+                        if relevant_term_matches > 0:
+                            term_boost = relevant_term_matches * 2
+                            score += term_boost
+                            score_explanation.append(f"+{term_boost} for relevant term matches")
+                        
+                        if score > 0:
                             # Clean up the sentence
-                            relevant_snippet = sentence.split(': ')[-1].strip() + "."
-                            break
+                            clean_sentence = sentence.strip()
+                            if not clean_sentence.endswith('.'):
+                                clean_sentence += '.'
+                            relevant_sentences.append((clean_sentence, score))
+                            logger.info(f"Sentence {i + 1}: '{clean_sentence}' - Score: {score}")
+                            logger.info(f"Score breakdown: {', '.join(score_explanation)}")
                     
-                    if not relevant_snippet:
-                        # If no direct match, try to find a sentence with semantic relevance
+                    # Sort by relevance score and pick the best
+                    relevant_snippet = ""
+                    if relevant_sentences:
+                        relevant_sentences.sort(key=lambda x: x[1], reverse=True)
+                        relevant_snippet = relevant_sentences[0][0] + "."
+                        logger.info(f"Selected snippet: '{relevant_snippet}' with score {relevant_sentences[0][1]}")
+                        
+                        # Log all scored sentences for debugging
+                        logger.info("All scored sentences:")
+                        for sentence, score in relevant_sentences:
+                            logger.info(f"- Score {score}: '{sentence}'")
+                    else:
+                        # Fallback to first non-header sentence
                         for sentence in sentences:
-                            sentence_lower = sentence.lower()
-                            if any(category in sentence_lower for category in query_categories):
+                            if not any(header in sentence.lower() for header in ['overview', 'information:', 'locations:', 'projects:']):
                                 relevant_snippet = sentence.split(': ')[-1].strip() + "."
+                                logger.info(f"Fallback to first non-header sentence: {relevant_snippet}")
                                 break
-                    
-                    if not relevant_snippet:
-                        relevant_snippet = sentences[0].split(': ')[-1].strip() + "." if sentences else doc
+                        if not relevant_snippet:
+                            relevant_snippet = sentences[0].split(': ')[-1].strip() + "."
+                            logger.info(f"Ultimate fallback to first sentence: {relevant_snippet}")
                     
                     st.markdown(f"**Relevance Score:** :{score_color}[{similarity_score:.2f}]")
                     st.markdown(f"**Most Relevant Part:**\n{relevant_snippet}")

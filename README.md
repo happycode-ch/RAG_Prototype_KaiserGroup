@@ -70,7 +70,7 @@ The search results will show:
 - A relevance score (color-coded):
   - Green (≥0.8): Highly relevant
   - Orange (≥0.5): Moderately relevant
-  - Red (<0.4): Less relevant
+  - Red (<0.5): Less relevant
 - The most relevant snippet, automatically extracted and cleaned from the document
 - Full content (expandable)
 - Debug information showing how the score was calculated:
@@ -81,9 +81,18 @@ The search results will show:
 
 The system uses multiple strategies to find the most relevant information:
 1. Semantic search using document embeddings
-2. Term-based matching for specific keywords
-3. Section-aware context understanding
-4. Question-type analysis (e.g., who, where, what)
+2. Term-based matching with weighted scoring:
+   - Role-specific patterns (e.g., "Chief Technology Officer", "CTO")
+   - Context-aware term matching
+   - Cumulative scoring for multiple relevant terms
+3. Intelligent snippet extraction:
+   - Removes unnecessary headers and metadata
+   - Preserves complete sentences
+   - Maintains proper formatting and punctuation
+4. Question-type analysis with specialized handling:
+   - Who/Role questions: Prioritizes role information and titles
+   - Where questions: Focuses on location information
+   - What/Project questions: Emphasizes project details and metrics
 
 ## System Components
 
