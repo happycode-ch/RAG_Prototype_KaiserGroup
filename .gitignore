@@ -59,6 +59,7 @@ logs/
 .env
 config.ini
 *.db
+prompt-documentation/
 
 # Jupyter Notebook
 .ipynb_checkpoints
